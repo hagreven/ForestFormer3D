@@ -412,6 +412,109 @@ if is_test:
 This two-step (or multiple-step) inference improves robustness in challenging, highly dense forests.
 
 ---
+## 🐋 Run Inference with Docker on Systems with CUDA 12.2 
+
+_Tested on Ubuntu 22.04 with NVIDIA H100 GPUs_
+
+All necessary changes are on the the branch `fix-for-h100-cuda12`.
+
+To get them: `git checkout fix-for-h100-cuda12.2`
+
+At first, setup the directory structure as described above:
+
+```bash
+ForestFormer3D/
+├── data/
+│   └── ForAINetV2/
+│       ├── train_val_data/
+│       └── test_data/
+└── work_dirs/
+```
+
+Download the model weights:
+```
+cd work_dirs
+wget https://zenodo.org/records/16742708/files/clean_forestformer.zip
+unzip clean_forestformer.zip
+rm clean_forestformer.zip
+```
+
+It should now look like this:
+
+```bash
+ForestFormer3D/
+├── data/
+│   └── ForAINetV2/
+│       ├── train_val_data/
+│       └── test_data/
+├── work_dirs/
+│   └── clean_forestformer/
+│       └── epoch_3000_fix.pth
+```
+
+Place you test data in the test_data folder and write it into the test_list.txt file. You can remove all other lines from test_list.txt, train_list.txt, and val_list.txt.
+
+__If test files do not have ground truth labels:__
+
+In `load_forainetv2_data.py`, locate the following lines...
+
+```python
+semantic_seg = pcd["semantic_seg"].astype(np.int64)
+treeID = pcd["treeID"].astype(np.int64)
+```
+
+... and replace them with:
+
+```python
+semantic_seg = np.ones((points.shape[0],), dtype=np.int64)
+treeID = np.zeros((points.shape[0],), dtype=np.int64)
+# semantic_seg = pcd["semantic_seg"].astype(np.int64)
+# treeID = pcd["treeID"].astype(np.int64)
+```
+This will prevent errors when labels are missing in test data.
+
+Build the Docker image using the Dockerfile:  
+```
+docker build -t forestformer3d .
+```
+Start the Docker container:
+```
+docker run --gpus all --shm-size=128g -d -p 127.0.0.1:49211:22 \
+  -v ~/ForestFormer3D:/workspace \
+  -v /workspace/segmentator:/workspace/segmentator \
+  --name forestformer3d forestformer3d
+```
+Access the shell within the container:
+```
+docker exec -it forestformer3d-gpu /bin/bash
+```
+From here you can run preprocessing and inference.
+
+__Preprocessing:__
+
+```bash
+# Step 1: Navigate to the data folder
+cd /workspace/data/ForAINetV2
+
+# Step 3: Run the data loader script
+python batch_load_ForAINetV2_data.py
+# This will regenerate /workspace/data/ForAINetV2/forainetv2_instance_data
+
+# Step 4: Navigate back to the main directory
+cd ../..
+
+# Step 5: Create data for training/testing
+python tools/create_data_forainetv2.py forainetv2
+```
+
+__Inference:__
+
+Once preprocessing is complete, you can run:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 python tools/test.py /workspace/configs/oneformer3d_qs_radius16_qp300_2many.py /workspace/work_dirs/clean_forestformer/epoch_3000_fix.pth
+```
+---
 ## 🙋‍♀️ Questions & suggestions
 
 Welcome to ask questions via Issues! This helps more people see the discussion and avoid duplicated questions.
