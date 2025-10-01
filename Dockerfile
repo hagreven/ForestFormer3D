@@ -1,67 +1,72 @@
-FROM pytorch/pytorch:1.13.1-cuda11.6-cudnn8-devel
+FROM pytorch/pytorch:2.1.0-cuda12.1-cudnn8-devel
 
-# 更新和安装必要的依赖
-RUN apt-key adv --fetch-keys https://developer.download.nvidia.com/compute/cuda/repos/ubuntu1804/x86_64/3bf863cc.pub \
-    && apt-key adv --fetch-keys https://developer.download.nvidia.com/compute/machine-learning/repos/ubuntu1804/x86_64/7fa2af80.pub \
-    && apt-get update \
-    && apt-get install -y ffmpeg libsm6 libxext6 git ninja-build libglib2.0-0 libxrender-dev cmake \
-    && apt-get install -y build-essential software-properties-common \
-    && add-apt-repository ppa:ubuntu-toolchain-r/test \
-    && apt-get update \
-    && apt-get install -y gcc-9 g++-9 \
-    && update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-9 60 \
-    && update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-9 60 \
-    && apt-get install -y python3-dev python3-pip \
-    && apt-get install -y --no-install-recommends libopenblas-dev nvidia-utils-530
+# Set as non-interactve
+ENV DEBIAN_FRONTEND=noninteractive
 
-# 设置环境变量以确保 CUDA 工具的可用性
+# System dependencies for Ubuntu 22.04
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        ffmpeg libsm6 libxext6 git ninja-build libglib2.0-0 libxrender-dev cmake \
+        build-essential software-properties-common wget curl \
+        python3-dev python3-pip python3-setuptools python-is-python3 \
+        libopenblas-dev libjpeg-dev libpng-dev libtiff-dev \
+        libavcodec-dev libavformat-dev libswscale-dev && \
+    rm -rf /var/lib/apt/lists/*
+
+# CUDA toolkit environment setup
 ENV PATH=/usr/local/cuda/bin:$PATH
 ENV LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH
 
-# 安装调试工具
+# Install debug tools
 RUN pip install debugpy
 
-# 安装 OpenMMLab 项目
+# OpenMMLab Core Libraries
 RUN pip install --no-deps \
-    mmengine==0.7.3 \
-    mmdet==3.0.0 \
+    mmengine==0.8.0 \
+    mmdet==3.2.0 \
     mmsegmentation==1.0.0 \
-    git+https://github.com/open-mmlab/mmdetection3d.git@22aaa47fdb53ce1870ff92cb7e3f96ae38d17f61
-RUN pip install mmcv==2.0.0 -f https://download.openmmlab.com/mmcv/dist/cu116/torch1.13.0/index.html --no-deps
+    mmdet3d==1.4.0
+    #git+https://github.com/open-mmlab/mmdetection3d.git@22aaa47fdb53ce1870ff92cb7e3f96ae38d17f61
 
-# 安装 MinkowskiEngine
-RUN apt-get update \
-    && apt-get -y install libopenblas-dev nvidia-cuda-dev
-#RUN TORCH_CUDA_ARCH_LIST="6.1 7.0 8.6" \  A10
-#A100
-RUN TORCH_CUDA_ARCH_LIST="8.0" \ 
-    pip install git+https://github.com/NVIDIA/MinkowskiEngine.git@02fc608bea4c0549b0a7b00ca1bf15dee4a0b228 -v --no-deps \
-    --install-option="--blas=openblas" \
-    --install-option="--force_cuda"
+# Install MMCV for CUDA 12.1 (compatible with torch 2.1)
+RUN pip install mmcv==2.1.0 -f https://download.openmmlab.com/mmcv/dist/cu121/torch2.1/index.html --no-deps
 
-# 手动编译 torch-scatter，确保 CUDA 支持
-RUN git clone https://github.com/rusty1s/pytorch_scatter.git \
-    && cd pytorch_scatter \
-    && git checkout tags/2.0.9 -b v2.0.9 \
-    && TORCH_CUDA_ARCH_LIST="6.1;7.0;8.0" FORCE_CUDA=1 pip install .
+# Install MinkowskiEngine (with CUDA 12.x support)
+ENV TORCH_CUDA_ARCH_LIST="9.0"  
+# H100
+RUN git clone https://github.com/NVIDIA/MinkowskiEngine.git \
+    && cd MinkowskiEngine \
+    && git fetch origin pull/567/head:fix-for-cuda-12.2 \
+    && git checkout fix-for-cuda-12.2 \
+    && export CXX=c++; export CUDA_HOME=/usr/local/cuda; python setup.py install --blas=openblas --force_cuda
 
-# 单独安装 ScanNet superpoint segmentator
-RUN git clone https://github.com/Karbo123/segmentator.git /workspace/segmentator \
-    && cd /workspace/segmentator/csrc \
-    && git reset --hard 76efe46d03dd27afa78df972b17d07f2c6cfb696 \
-    && mkdir build \
-    && cd build \
-    && cmake .. \
+# Compile torch-scatter with CUDA support
+# RUN git clone https://github.com/rusty1s/pytorch_scatter.git && \
+#     cd pytorch_scatter && \
+#     git checkout tags/2.0.9 -b v2.0.9 && \
+#     TORCH_CUDA_ARCH_LIST="9.0" FORCE_CUDA=1 pip install .
+
+# Install torch-scatter (2.1.2) and torch-cluster (1.6.3) with CUDA support
+RUN export FORCE_CUDA=1; pip install --no-cache-dir torch-scatter torch-cluster -f https://data.pyg.org/whl/torch-2.1.0+cu122.html
+
+# Install ScanNet superpoint segmentator
+RUN git clone https://github.com/Karbo123/segmentator.git /workspace/segmentator && \
+    cd /workspace/segmentator/csrc && \
+    git reset --hard 76efe46d03dd27afa78df972b17d07f2c6cfb696 && \
+    # Overwrite C++ standard version from C++14 to C++17 in the CMakeLists.txt
+    # Necessary because PyTorch 2.1.0 requires at least C++17 and C++14 triggered error
+    sed -i 's/set(CMAKE_CXX_STANDARD 14)/set(CMAKE_CXX_STANDARD 17)/' CMakeLists.txt && \
+    mkdir build && cd build && \
+    cmake .. \
         -DCMAKE_PREFIX_PATH=$(python -c 'import torch;print(torch.utils.cmake_prefix_path())') \
         -DPYTHON_INCLUDE_DIR=$(python -c "from distutils.sysconfig import get_python_inc; print(get_python_inc())") \
-        -DPYTHON_LIBRARY=$(python -c "import distutils.sysconfig as sysconfig; print(sysconfig.get_config_var('LIBDIR') + '/libpython3.10.so')") \
-        -DCMAKE_INSTALL_PREFIX=$(python -c 'from distutils.sysconfig import get_python_lib; print(get_python_lib())') \
-    && make \
-    && make install
+        -DPYTHON_LIBRARY=$(python -c "import distutils.sysconfig as sysconfig; print(sysconfig.get_config_var('LIBDIR') + '/libpython3.so')") \
+        -DCMAKE_INSTALL_PREFIX=$(python -c 'from distutils.sysconfig import get_python_lib; print(get_python_lib())') && \
+    make && make install
 
-# 安装剩余的 Python 包
+# Install Python packages
 RUN pip install --no-deps \
-    spconv-cu116==2.3.6 \
+    spconv-cu120==2.3.6 \
     addict==2.4.0 \
     yapf==0.33.0 \
     termcolor==2.3.0 \
@@ -70,17 +75,17 @@ RUN pip install --no-deps \
     rich==13.3.5 \
     opencv-python==4.7.0.72 \
     pycocotools==2.0.6 \
-    Shapely==1.8.5 \
+    shapely==1.8.5 \
     scipy==1.10.1 \
     terminaltables==3.1.10 \
     numba==0.57.0 \
     llvmlite==0.40.0 \
     pccm==0.4.7 \
-    ccimport==0.4.2 \
+    ccimport==0.4.4 \
     pybind11==2.10.4 \
     ninja==1.11.1 \
     lark==1.1.5 \
-    cumm-cu116==0.4.9 \
+    cumm-cu120==0.6.3 \
     pyquaternion==0.9.9 \
     lyft-dataset-sdk==0.0.8 \
     pandas==2.0.1 \
@@ -117,20 +122,27 @@ RUN pip install --no-deps \
     google-auth-oauthlib \
     google-auth \
     requests-oauthlib \
-    oauthlib
+    oauthlib \
+    "laspy[lazrs]" \
+    portalocker==3.2.0
 
-RUN apt-get update && apt-get install -y nvidia-utils-530
+# Torch points kernels
+RUN export FORCE_CUDA=1; export TORCH_CUDA_ARCH_LIST="9.0"; pip install --no-deps --no-cache-dir torch-points-kernels==0.7.0
 
-# 设置 PYTHONPATH 环境变量
+# Torch-cluster reinstallation (clean)
+# RUN pip uninstall -y torch-cluster && \
+#     pip install --no-deps --no-cache-dir torch-cluster
+
+# Replace the following files with updated versions
+COPY replace_mmdetection_files/loops.py /opt/conda/lib/python3.10/site-packages/mmengine/runner/
+COPY replace_mmdetection_files/base_model.py /opt/conda/lib/python3.10/site-packages/mmengine/model/base_model/
+COPY replace_mmdetection_files/transforms_3d.py /opt/conda/lib/python3.10/site-packages/mmdet3d/datasets/transforms/
+
+# Update for compatibility with Python 3.10+ importlib.metadata entry point handling
+RUN pip install --upgrade setuptools importlib_metadata fsspec tensorboard
+
+# Set PYTHONPATH
 ENV PYTHONPATH=/workspace
 
-# 保持容器运行
+# Keep container running
 CMD ["bash", "-c", "while true; do sleep 1000; done"]
-
-RUN pip install --no-deps --no-cache-dir\
-    torch-points-kernels==0.7.0
-
-RUN pip uninstall torch-cluster
-
-RUN pip install --no-deps --no-cache-dir\
-    torch-cluster
