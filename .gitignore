@@ -1,0 +1,10 @@
+# Ignore pickled data files
+*.pkl
+
+# Ignore compiled python files
+__pycache__/
+*.py[cod]
+
+# Ignore numpy and large binary files
+*.npy
+*.bin
