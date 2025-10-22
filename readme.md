@@ -486,7 +486,7 @@ docker run --gpus all --shm-size=128g -d -p 127.0.0.1:49211:22 \
 ```
 Access the shell within the container:
 ```
-docker exec -it forestformer3d-gpu /bin/bash
+docker exec -it forestformer3d /bin/bash
 ```
 From here you can run preprocessing and inference.
 
