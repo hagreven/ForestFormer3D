@@ -12,7 +12,7 @@ import json
 import os
 
 import numpy as np
-from plyutils import read_ply
+from lasutils import read_las
 
 currentdir = os.path.dirname(
     os.path.abspath(inspect.getfile(inspect.currentframe())))
@@ -89,7 +89,7 @@ def extract_bbox(mesh_vertices, label_ids, instance_ids, bg_sem=np.array([0])):
     return instance_bboxes
 
 
-def export(ply_file,
+def export(pcd_file,
            output_file=None,
            test_mode=False):
     """Export original files to vert, ins_label, sem_label and bbox file.
@@ -116,12 +116,12 @@ def export(ply_file,
     #    data = ply_data['vertex'].data
     #    return {key: data[key] for key in data.dtype.names}
 
-    pcd = read_ply(ply_file)
+    pcd = read_las(pcd_file)
     #points = np.vstack((pcd['x'], pcd['y'], pcd['z'])).astype(np.float32).T
 
     points = np.vstack((pcd['x'], pcd['y'], pcd['z'])).astype(np.float64).T
 
-    is_blue = 'bluepoints' in os.path.basename(ply_file)
+    is_blue = 'bluepoints' in os.path.basename(pcd_file)
 
     if is_blue:
         offsets = np.zeros(3, dtype=np.float64)
